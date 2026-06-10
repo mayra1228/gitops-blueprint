@@ -1,0 +1,107 @@
+name: Terraform Plan & Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - sandbox
+      terraform_root:
+        description: "Terraform root path"
+        required: true
+        type: string
+        default: "infra"
+      cluster_name:
+        description: "Target cluster (guarded)"
+        required: true
+        type: choice
+        options:
+          - kind-gitops-sandbox
+      action:
+        description: "Terraform operation"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+      change_id:
+        description: "GitOps change ID"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  terraform:
+    name: Terraform ${{ inputs.action }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.terraform_root }}
+    concurrency:
+      group: terraform-${{ github.repository }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7"
+
+      - name: Guard cluster boundary
+        run: |
+          test "${{ inputs.cluster_name }}" = "kind-gitops-sandbox" || {
+            echo "Only kind-gitops-sandbox is allowed for mutable execution.";
+            exit 1;
+          }
+
+      - name: Guard apply conditions
+        if: github.event.inputs.action == 'apply'
+        run: |
+          test "${{ inputs.environment }}" = "sandbox" || {
+            echo "Apply is only allowed for sandbox.";
+            exit 1;
+          }
+          test "${{ inputs.cluster_name }}" = "kind-gitops-sandbox" || {
+            echo "Apply is only allowed on kind-gitops-sandbox.";
+            exit 1;
+          }
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
+          terraform show -no-color tfplan > tfplan.txt
+
+      - name: Upload plan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ github.run_id }}
+          path: |
+            ${{ inputs.terraform_root }}/tfplan
+            ${{ inputs.terraform_root }}/tfplan.txt
+          if-no-files-found: error
+
+      - name: Terraform apply
+        if: github.event.inputs.action == 'apply'
+        run: terraform apply -input=false -auto-approve tfplan

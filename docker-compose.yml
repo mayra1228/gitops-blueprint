@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    ports:
+      - "9090:8000"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./demo_data:/demo_data
+      - ./demo_data:/repos/blueprint-demo:ro
+      - ./.kubeconfig-docker.yaml:/kubeconfig/kind.yaml:ro
+      - repos_data:/data/repos
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - kind
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER: gitops
+      POSTGRES_PASSWORD: gitops_dev
+      POSTGRES_DB: gitops_platform
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitops -d gitops_platform"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+networks:
+  kind:
+    external: true
+
+volumes:
+  pgdata:
+  repos_data:

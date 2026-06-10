@@ -1,0 +1,37 @@
+version: "1.0"
+platform: infra
+boundary: ODP
+component: hypelevel
+name: ecp
+clusterID: aks-prod-01
+namespace: ecp-prod
+currentLevel: medium
+services:
+  - serviceName: api-gateway
+    low: 4
+    medium: 8
+    high: 20
+    max: 24
+    KEDA: false
+    statefulset: false
+  - serviceName: order-service
+    low: 6
+    medium: 12
+    high: 30
+    max: 36
+    KEDA: false
+    statefulset: false
+  - serviceName: payment-worker
+    low: 2
+    medium: 4
+    high: 10
+    max: 12
+    KEDA: false
+    statefulset: true
+  - serviceName: notification-sender
+    low: 1
+    medium: 2
+    high: 5
+    max: 6
+    KEDA: true
+    statefulset: false

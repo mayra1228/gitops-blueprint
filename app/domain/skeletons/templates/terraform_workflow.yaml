@@ -1,0 +1,98 @@
+# GitOps Platform — Terraform Plan + Apply Workflow
+# Triggered by workflow_dispatch from the platform after PR approval
+name: Terraform Plan & Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - sandbox
+      terraform_root:
+        description: "Terraform root module path"
+        required: true
+        type: string
+        default: "infra"
+      cluster_name:
+        description: "Allowed target cluster name"
+        required: true
+        type: choice
+        options:
+          - kind-gitops-sandbox
+      action:
+        description: "Terraform action to perform"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+      change_id:
+        description: "GitOps Platform change request ID"
+        required: false
+        type: string
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  terraform:
+    name: "Terraform ${{ inputs.action }} — ${{ inputs.environment }}"
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.terraform_root }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7"
+
+      - name: Enforce cluster boundary
+        run: |
+          test "${{ inputs.cluster_name }}" = "kind-gitops-sandbox" || \
+            (echo "Only kind-gitops-sandbox is allowed" && exit 1)
+
+      - name: Terraform Fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -input=false -no-color -out=tfplan \
+            -var="environment=${{ inputs.environment }}" \
+            -var="change_id=${{ inputs.change_id }}"
+          terraform show -no-color tfplan > tfplan.txt
+
+      - name: Upload plan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ github.run_id }}
+          path: |
+            ${{ inputs.terraform_root }}/tfplan
+            ${{ inputs.terraform_root }}/tfplan.txt
+          if-no-files-found: error
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply' && github.event.inputs.environment == 'sandbox' && github.event.inputs.cluster_name == 'kind-gitops-sandbox'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Notify Platform
+        if: always()
+        run: |
+          echo "Workflow ${{ job.status }} for change ${{ inputs.change_id }}"
+          echo "Run ID: ${{ github.run_id }}"

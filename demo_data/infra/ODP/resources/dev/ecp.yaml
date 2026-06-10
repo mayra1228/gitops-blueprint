@@ -1,0 +1,45 @@
+version: "1.0"
+platform: infra
+boundary: ODP
+component: resources
+name: ecp
+env: dev
+clusterID: aks-dev-01
+namespace: ecp-dev
+services:
+  - serviceName: api-gateway
+    minReplicas: 2
+    maxReplicas: 8
+    requestCPU: "500m"
+    limitCPU: "2000m"
+    requestMem: "512Mi"
+    limitMem: "2048Mi"
+    cpuTargetAverageUtilization: 70
+    memTargetAverageUtilization: 80
+    initialDelaySeconds: 30
+  - serviceName: order-service
+    minReplicas: 3
+    maxReplicas: 10
+    requestCPU: "1000m"
+    limitCPU: "4000m"
+    requestMem: "1024Mi"
+    limitMem: "4096Mi"
+    cpuTargetAverageUtilization: 65
+    memTargetAverageUtilization: 75
+    initialDelaySeconds: 45
+  - serviceName: payment-worker
+    minReplicas: 1
+    maxReplicas: 5
+    requestCPU: "250m"
+    limitCPU: "1000m"
+    requestMem: "256Mi"
+    limitMem: "1024Mi"
+    statefulset: true
+  - serviceName: notification-sender
+    minReplicas: 1
+    maxReplicas: 3
+    requestCPU: "200m"
+    limitCPU: "500m"
+    requestMem: "128Mi"
+    limitMem: "512Mi"
+    KEDA: true
