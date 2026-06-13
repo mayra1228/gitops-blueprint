@@ -1,5 +1,7 @@
 # Terraform GitOps Backend Architecture
 
+> Consolidated product spec: `docs/Product-Specification.md`
+
 ## Dependency Graph
 ### Phase 1 — Core Platform (complete)
 1. demo_data Terraform fixtures

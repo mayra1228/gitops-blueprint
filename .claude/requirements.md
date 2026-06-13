@@ -1,7 +1,9 @@
 # Terraform GitOps Backend Requirements
 
+> Consolidated product spec: `docs/Product-Specification.md`
+
 ## Scope
-Implement Terraform-aware backend domain behavior for inventory, templates, skeletons, and change previews while preserving existing ODP/K8S workflows. Integrate AI-assisted review and diagnostics through a pluggable LLM Gateway that supports both cloud and local/private model backends.
+AI-Native Terraform GitOps Control Plane — reads existing Terraform/K8S projects, visualizes desired-state architecture, generates standard IaC skeletons, executes governed changes through platform-native CI/CD, and provides AI-assisted review — all with enterprise safety boundaries. Supports Ollama (local) and OpenAI/Azure backends via pluggable LLM Gateway.
 
 ## Acceptance Criteria
 
