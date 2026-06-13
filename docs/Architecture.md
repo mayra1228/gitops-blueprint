@@ -86,3 +86,10 @@ Change Lifecycle:
 
 - Inspired by k8sgpt: on `k8s_apply` failure or GitHub Actions workflow failure, the platform collects error output (stderr, K8s events, workflow logs) and passes a truncated summary to the LLM Gateway.
 - Response stored as `artifacts["ai_diagnostics"]` and surfaced in Change Workspace detail.
+
+### System Prompt Strategy
+
+- System prompts are domain-specific plain-text templates stored in `app/domain/changes/prompts/` (e.g. `k8s_manifest_audit.txt`, `terraform_hcl_audit.txt`).
+- The K8S manifest audit prompt enforces: privileged container detection, resource requests/limits, immutable image tags (no `latest`), and liveness/readiness probes — output as risk-level table with recommended YAML fixes.
+- Prompt selection is automatic based on `change_type` and `resource_type`: K8S resources use the manifest audit prompt; Terraform resources use the HCL audit prompt.
+- All prompts use `{context}` placeholders filled at runtime with masked diff + object metadata.

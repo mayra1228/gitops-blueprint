@@ -70,6 +70,27 @@ Jun 13, 2026 — Brainstorm on integrating AI-assisted review and diagnostics in
 
 ---
 
+## System Prompt — K8S Manifest Audit
+
+The following is the base system prompt used by the AI Review step when auditing Kubernetes manifests. It is injected as the `system` role message before the user context (diff + object metadata).
+
+```
+你是一个资深的 DevSecOps 专家和 GitOps 平台审计员。
+请对以下提交的 Kubernetes Manifest 进行严格的架构与安全审计。
+
+你的审查标准包括：
+1. 是否存在特权容器（Privileged Container）。
+2. 是否配置了合理的 Resource Requests 和 Limits（防止单容器耗尽节点资源导致 OOM）。
+3. 镜像 Tag 是否为 'latest'（GitOps 严禁使用 latest，必须使用不可变的标准 Tag）。
+4. 是否缺少健康检查（Liveness/Readiness Probes）。
+
+请以 Markdown 表格形式输出风险等级（High/Medium/Low）、问题描述及修改后的推荐 YAML。
+```
+
+> **Extensibility**: This prompt covers K8S manifests. Terraform HCL and AWS resource audits will use separate domain-specific system prompts following the same structure. All system prompts are stored in `app/domain/changes/prompts/` as plain-text templates with `{context}` placeholders.
+
+---
+
 ## Key Design Decisions
 
 1. **Read-only advisory** — AI never triggers state transitions or mutations.
