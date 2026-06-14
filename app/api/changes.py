@@ -36,6 +36,29 @@ class ExecuteRequest(BaseModel):
     mode: str = "skeleton"
 
 
+def _create_llm_gateway(ai_config: dict):
+    """Factory: create LLM Gateway from project ai_config."""
+    from app.infrastructure.adapters.llm.ollama import OllamaGateway
+    from app.infrastructure.adapters.llm.openai_compat import OpenAICompatGateway
+
+    provider = ai_config.get("provider", "ollama")
+    endpoint = ai_config.get("endpoint", "http://localhost:11434")
+    model = ai_config.get("model", "deepseek-r1")
+    data_policy = ai_config.get("data_policy", "no_external")
+
+    # Enforce data_policy: block non-localhost for no_external
+    if data_policy == "no_external" and provider != "ollama":
+        if not any(h in endpoint for h in ("localhost", "127.0.0.1", "host.docker.internal")):
+            raise ValidationError(f"data_policy=no_external blocks external endpoint: {endpoint}")
+
+    if provider == "ollama":
+        return OllamaGateway(endpoint=endpoint, model=model)
+    return OpenAICompatGateway(
+        endpoint=endpoint, model=model,
+        api_key=ai_config.get("api_key", ""),
+    )
+
+
 async def _load_project(db: AsyncSession, project_id: str) -> Optional[dict]:
     from app.domain.projects.service import ProjectService
 
@@ -372,3 +395,92 @@ async def get_audit_trail(
         return await svc.query_change_audit_trail(change_id)
     except ValidationError:
         raise HTTPException(status_code=404, detail=f"change not found: {change_id}")
+
+
+@router.post("/{change_id:path}/ai-review")
+async def trigger_ai_review(
+    change_id: str,
+    project_id: str = Depends(get_project_id),
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
+):
+    """AI Review — read-only artifact after PlanReady. Does NOT change status."""
+    from app.domain.changes.ai_review import run_ai_review
+
+    svc = await _make_service_with_root(db, project_id)
+    try:
+        change = await svc.get_change(change_id)
+        if change["status"] not in ("PlanReady", "PendingApproval"):
+            raise ValidationError("ai-review requires PlanReady or PendingApproval status")
+
+        project = await _load_project(db, project_id)
+        ai_config = (project or {}).get("ai_config", {})
+        if not ai_config.get("provider"):
+            ai_config = {"provider": "ollama", "model": "deepseek-r1", "endpoint": "http://localhost:11434", "data_policy": "no_external"}
+
+        gateway = _create_llm_gateway(ai_config)
+        ai_result = await run_ai_review(gateway, change)
+
+        # Store as artifact (read-only, no status change)
+        artifacts = change.get("artifacts", {})
+        await svc.repository.update(change_id, {
+            "artifacts": {**artifacts, "ai_review": ai_result},
+        })
+        await svc.record_audit_event(
+            change_id, event_type="ai_review_completed", actor="ai_agent",
+            message=f"AI Review completed: risk_level={ai_result.get('risk_level', 'unknown')}",
+            metadata={"model": ai_result.get("model"), "provider": ai_result.get("provider"),
+                       "prompt_hash": ai_result.get("prompt_hash"), "token_count": ai_result.get("token_count")},
+        )
+        return ai_result
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Review failed: {e}")
+
+
+@router.post("/{change_id:path}/ai-diagnostics")
+async def trigger_ai_diagnostics(
+    change_id: str,
+    project_id: str = Depends(get_project_id),
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
+):
+    """AI Diagnostics — analyze execution failure, advisory only."""
+    from app.domain.changes.ai_review import run_ai_diagnostics
+
+    svc = await _make_service_with_root(db, project_id)
+    try:
+        change = await svc.get_change(change_id)
+        execution = change.get("artifacts", {}).get("execution", {})
+        if execution.get("status") not in ("failed", "ExecutionFailed", "blocked"):
+            raise ValidationError("ai-diagnostics requires a failed/blocked execution")
+
+        # Extract error log from execution checks
+        error_log = ""
+        for check in execution.get("checks", []):
+            if check.get("status") in ("failed", "error", "blocked"):
+                error_log += check.get("stderr", "") + "\n" + check.get("message", "") + "\n"
+
+        project = await _load_project(db, project_id)
+        ai_config = (project or {}).get("ai_config", {})
+        if not ai_config.get("provider"):
+            ai_config = {"provider": "ollama", "model": "deepseek-r1", "endpoint": "http://localhost:11434", "data_policy": "no_external"}
+
+        gateway = _create_llm_gateway(ai_config)
+        diag_result = await run_ai_diagnostics(gateway, change, error_log)
+
+        artifacts = change.get("artifacts", {})
+        await svc.repository.update(change_id, {
+            "artifacts": {**artifacts, "ai_diagnostics": diag_result},
+        })
+        await svc.record_audit_event(
+            change_id, event_type="ai_diagnostics_completed", actor="ai_agent",
+            message=f"AI Diagnostics completed: {diag_result.get('root_cause', '')[:100]}",
+            metadata={"model": diag_result.get("model"), "provider": diag_result.get("provider")},
+        )
+        return diag_result
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Diagnostics failed: {e}")

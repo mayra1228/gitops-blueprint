@@ -16,6 +16,7 @@ class Project:
     git_config: Optional[dict] = None
     execution_adapter: Optional[str] = None
     execution_config: Optional[dict] = None
+    ai_config: Optional[dict] = None
 
     def to_dict(self) -> dict:
         git_cfg = self.git_config or {"org": self.github_org, "repo": self.github_repo}
@@ -23,6 +24,12 @@ class Project:
             "job_name": "gitops-deploy",
             "workflow_id": "terraform-plan-apply.yml",
             "cluster_name": "kind-gitops-sandbox",
+        }
+        ai_cfg = self.ai_config or {
+            "provider": "ollama",
+            "model": "deepseek-r1",
+            "endpoint": "http://localhost:11434",
+            "data_policy": "no_external",
         }
         return {
             "id": self.id,
@@ -36,4 +43,5 @@ class Project:
             "git_config": git_cfg,
             "execution_adapter": self.execution_adapter or "jenkins",
             "execution_config": exec_cfg,
+            "ai_config": ai_cfg,
         }

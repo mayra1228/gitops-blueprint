@@ -8,3 +8,4 @@ __pycache__/
 .kubeconfig*.yaml
 repos_data/
 pgdata/
+.DS_Store
