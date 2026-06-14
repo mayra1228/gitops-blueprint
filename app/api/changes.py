@@ -249,7 +249,39 @@ async def submit_approval(
 ):
     svc = await _make_service_with_root(db, project_id)
     try:
-        return await svc.submit_for_approval(change_id, body.requester, body.note)
+        # ── AI Review auto-trigger (before submit) ──
+        # pr-agent pattern: review runs automatically, result is advisory only
+        change = await svc.get_change(change_id)
+        if change["status"] == "PlanReady" and not change.get("artifacts", {}).get("ai_review"):
+            try:
+                from app.domain.changes.ai_review import run_ai_review
+                project = await _load_project(db, project_id)
+                ai_config = (project or {}).get("ai_config", {})
+                if ai_config.get("provider"):
+                    gateway = _create_llm_gateway(ai_config)
+                    ai_result = await run_ai_review(gateway, change)
+                    artifacts = change.get("artifacts", {})
+                    await svc.repository.update(change_id, {
+                        "artifacts": {**artifacts, "ai_review": ai_result},
+                    })
+                    await svc.record_audit_event(
+                        change_id, event_type="ai_review_completed", actor="ai_agent",
+                        message=f"AI Review auto-triggered: risk_level={ai_result.get('risk_level', 'unknown')}",
+                        metadata={"model": ai_result.get("model"), "provider": ai_result.get("provider"),
+                                   "prompt_hash": ai_result.get("prompt_hash"), "token_count": ai_result.get("token_count")},
+                    )
+            except Exception:
+                pass  # AI failure must not block the submit flow
+
+        result = await svc.submit_for_approval(change_id, body.requester, body.note)
+
+        # Attach ai_review to response if available
+        updated = await svc.get_change(change_id)
+        ai_review = updated.get("artifacts", {}).get("ai_review")
+        if ai_review:
+            result["ai_review"] = ai_review
+
+        return result
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -286,6 +318,35 @@ async def execute_change(
             await svc.repository.update(change_id, {"scope": change.get("scope") or {}})
 
         result = await svc.prepare_execution(change_id, body.executor, mode=body.mode)
+
+        # ── AI Diagnostics auto-trigger on execution failure ──
+        # k8sgpt pattern: filter errors first, then send to LLM
+        if result.get("status") in ("failed", "ExecutionFailed", "blocked"):
+            try:
+                from app.domain.changes.ai_review import run_ai_diagnostics
+                project = await _load_project(db, project_id) if not project else project
+                ai_config = (project or {}).get("ai_config", {})
+                if ai_config.get("provider"):
+                    error_log = ""
+                    for check in result.get("checks", []):
+                        if check.get("status") in ("failed", "error", "blocked"):
+                            error_log += check.get("stderr", "") + "\n" + check.get("message", "") + "\n"
+                    if error_log.strip():
+                        gateway = _create_llm_gateway(ai_config)
+                        updated_change = await svc.get_change(change_id)
+                        diag_result = await run_ai_diagnostics(gateway, updated_change, error_log)
+                        artifacts = updated_change.get("artifacts", {})
+                        await svc.repository.update(change_id, {
+                            "artifacts": {**artifacts, "ai_diagnostics": diag_result},
+                        })
+                        await svc.record_audit_event(
+                            change_id, event_type="ai_diagnostics_completed", actor="ai_agent",
+                            message=f"AI Diagnostics auto-triggered: {diag_result.get('root_cause', '')[:100]}",
+                            metadata={"model": diag_result.get("model"), "provider": diag_result.get("provider")},
+                        )
+                        result["ai_diagnostics"] = diag_result
+            except Exception:
+                pass  # AI failure must not block the execution response
 
         if settings.github_token and change.get("artifacts", {}).get("patched_yaml"):
             from app.api.deps import get_infra_registry
